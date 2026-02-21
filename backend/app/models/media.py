@@ -3,6 +3,7 @@ from sqlalchemy.orm import relationship
 from datetime import datetime
 from enum import Enum
 from app.core.database import Base
+from app.models.media_collection import media_collections
 
 
 class MediaType(str, Enum):
@@ -38,8 +39,7 @@ class Media(Base):
     # Image rotation (0, 90, 180, 270 degrees clockwise)
     rotation_angle = Column(Integer, nullable=True, default=0)  # Rotation in degrees
     
-    # Relations
-    collection_id = Column(Integer, ForeignKey("collections.id", ondelete="CASCADE"), nullable=False, index=True)
+    # Relations - uploader (required)
     uploaded_by = Column(String(255), ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     
     # Metadata - Common
@@ -73,5 +73,5 @@ class Media(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
     # Relationships
-    collection = relationship("Collection", back_populates="media")
+    collections = relationship("Collection", secondary=media_collections, back_populates="media")
     uploaded_by_user = relationship("User", back_populates="media")

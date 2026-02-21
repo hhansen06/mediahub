@@ -6,39 +6,30 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 from app.core.config import settings
-from app.api import auth, collections, media_upload, media, public
+from app.api import auth, collections, media_upload, media, public, users
 
 
 class TrustedProxyMiddleware(BaseHTTPMiddleware):
-    """Middleware to handle X-Forwarded-* headers from reverse proxies like Traefik"""
+    """Fix redirect Location headers to use configured APP_EXTERNAL_URL"""
     async def dispatch(self, request: Request, call_next):
-        # Extract forwarded headers (case-insensitive)
-        forwarded_proto = request.headers.get("x-forwarded-proto")
-        forwarded_host = request.headers.get("x-forwarded-host")
-        forwarded_for = request.headers.get("x-forwarded-for")
-        
-        # Update request scope with X-Forwarded headers
-        if forwarded_for:
-            # Set client to the forwarded IP
-            request.scope["client"] = (forwarded_for.split(",")[0].strip(), 0)
-        
-        if forwarded_proto:
-            # Set scheme to the forwarded protocol
-            request.scope["scheme"] = forwarded_proto
-        
-        if forwarded_host:
-            # Set server to the forwarded host
-            port = 443 if forwarded_proto == "https" else 80
-            request.scope["server"] = (forwarded_host, port)
-        
         response = await call_next(request)
         
-        # Fix Location header in redirects if it has the wrong scheme
-        if "location" in response.headers and forwarded_proto:
+        # Fix redirect Location headers
+        if response.status_code in [301, 302, 303, 307, 308] and "location" in response.headers:
             location = response.headers["location"]
-            # If location starts with http:// but we're behind an https proxy, fix it
-            if forwarded_proto == "https" and location.startswith("http://"):
-                location = location.replace("http://", "https://", 1)
+            
+            # Only rewrite internal redirects (starting with http://localhost)
+            if "localhost" in location or location.startswith("/"):
+                # If it's a relative redirect, build full URL with APP_EXTERNAL_URL
+                if location.startswith("/"):
+                    external_url = settings.APP_EXTERNAL_URL.rstrip("/")
+                    location = f"{external_url}{location}"
+                else:
+                    # Rewrite absolute localhost URLs to use APP_EXTERNAL_URL
+                    external_url = settings.APP_EXTERNAL_URL.rstrip("/")
+                    location = location.replace("http://localhost:8000", external_url)
+                    location = location.replace("http://localhost", external_url)
+                
                 response.headers["location"] = location
         
         return response
@@ -47,7 +38,8 @@ class TrustedProxyMiddleware(BaseHTTPMiddleware):
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
-    debug=settings.DEBUG
+    debug=settings.DEBUG,
+    redirect_slashes=True  # Enable trailing slash redirects
 )
 
 # Trust X-Forwarded-* headers from reverse proxy (Traefik)
@@ -74,6 +66,7 @@ app.include_router(collections.router, prefix="/api")
 app.include_router(media_upload.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 app.include_router(public.router, prefix="/api")  # Public APIs
+app.include_router(users.router, prefix="/api")
 
 
 @app.get("/")

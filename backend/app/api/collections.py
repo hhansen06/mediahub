@@ -8,7 +8,6 @@ from app.core.auth import get_current_user, CurrentUser
 from app.models.collection import Collection
 from app.models.media import Media
 from app.models.user import User
-from app.models.person import Person, FaceDetection
 from app.schemas.collection import (
     CollectionCreate,
     CollectionUpdate,
@@ -54,6 +53,9 @@ async def list_collections(
 ):
     """Get list of all collections (visible to all authenticated users)"""
     # Query collections with owner info and media count
+    # Use outerjoin with the many-to-many junction table
+    from app.models.media_collection import media_collections
+    
     collections = db.query(
         Collection,
         User.username,
@@ -62,7 +64,9 @@ async def list_collections(
     ).join(
         User, Collection.owner_id == User.id
     ).outerjoin(
-        Media, Collection.id == Media.collection_id
+        media_collections, Collection.id == media_collections.c.collection_id
+    ).outerjoin(
+        Media, Media.id == media_collections.c.media_id
     ).group_by(
         Collection.id
     ).offset(skip).limit(limit).all()
@@ -86,6 +90,8 @@ async def get_collection(
 ):
     """Get a specific collection by ID"""
     # Query collection with owner info and media count
+    from app.models.media_collection import media_collections
+    
     result = db.query(
         Collection,
         User.username,
@@ -94,7 +100,9 @@ async def get_collection(
     ).join(
         User, Collection.owner_id == User.id
     ).outerjoin(
-        Media, Collection.id == Media.collection_id
+        media_collections, Collection.id == media_collections.c.collection_id
+    ).outerjoin(
+        Media, Media.id == media_collections.c.media_id
     ).filter(
         Collection.id == collection_id
     ).group_by(
@@ -148,8 +156,8 @@ async def update_collection(
     db.commit()
     db.refresh(collection)
     
-    # Add media count
-    media_count = db.query(func.count(Media.id)).filter(Media.collection_id == collection_id).scalar()
+    # Add media count from many-to-many relationship
+    media_count = len(collection.media)
     collection_response = CollectionResponse.model_validate(collection)
     collection_response.media_count = media_count or 0
     
@@ -162,7 +170,7 @@ async def delete_collection(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a collection (only by owner). This will also delete all associated media."""
+    """Delete a collection (only by owner). Media will no longer be in this collection."""
     collection = db.query(Collection).filter(Collection.id == collection_id).first()
     
     if not collection:
@@ -178,52 +186,11 @@ async def delete_collection(
             detail="Not authorized to delete this collection"
         )
     
-    # Get all media in this collection
-    media_items = db.query(Media).filter(Media.collection_id == collection_id).all()
+    # Remove this collection from all media (many-to-many relationship)
+    # The media themselves are not deleted, only the association
+    for media in collection.media[:]:  # Use slice to iterate over a copy
+        collection.media.remove(media)
     
-    # Collect all S3 keys to delete (media files, thumbnails, and face crops)
-    s3_keys_to_delete = []
-    person_ids = set()
-    
-    for media in media_items:
-        # Add media file and thumbnail
-        s3_keys_to_delete.append(media.s3_key)
-        if media.thumbnail_s3_key:
-            s3_keys_to_delete.append(media.thumbnail_s3_key)
-        
-        # Get face detections and collect person IDs
-        detections = db.query(FaceDetection).filter(FaceDetection.media_id == media.id).all()
-        for detection in detections:
-            if detection.person_id:
-                person_ids.add(detection.person_id)
-            # Add face crop S3 key if exists
-            if detection.face_crop_s3_key:
-                s3_keys_to_delete.append(detection.face_crop_s3_key)
-        
-        # Delete face detections
-        db.query(FaceDetection).filter(FaceDetection.media_id == media.id).delete()
-    
-    # Delete all S3 files
-    if s3_keys_to_delete:
-        from app.services.s3_service import s3_service
-        s3_service.delete_files(s3_keys_to_delete)
-    
-    # Clean up persons with no remaining detections
-    for person_id in person_ids:
-        person = db.query(Person).filter(Person.id == person_id).first()
-        if person:
-            remaining_detections = db.query(func.count(FaceDetection.id)).filter(
-                FaceDetection.person_id == person_id
-            ).scalar()
-            
-            if remaining_detections == 0:
-                # Delete person's sample face image from S3
-                if person.sample_face_image_s3_key:
-                    s3_service.delete_file(person.sample_face_image_s3_key)
-                db.delete(person)
-    
-    # Delete the collection (cascade will delete media from DB)
+    # Delete the collection
     db.delete(collection)
     db.commit()
-    
-    return None

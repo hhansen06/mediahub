@@ -39,8 +39,8 @@ async def get_collection_media(
             detail="Collection not found"
         )
     
-    # Build query
-    query = db.query(Media).filter(Media.collection_id == collection_id)
+    # Build query - use Many-to-Many relationship
+    query = db.query(Media).join(Media.collections).filter(Collection.id == collection_id)
     
     # Filter by media type if specified
     if media_type:
@@ -435,7 +435,7 @@ async def bulk_update_media(
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Bulk update media items (uploader and/or taken_at date)"""
+    """Bulk update media items (uploader, collections and/or taken_at date)"""
     if not request.media_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -443,10 +443,10 @@ async def bulk_update_media(
         )
     
     # Check if at least one field to update is provided
-    if request.uploaded_by is None and request.taken_at is None:
+    if request.uploaded_by is None and request.collections is None and request.taken_at is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="At least one field (uploaded_by or taken_at) must be provided"
+            detail="At least one field (uploaded_by, collections or taken_at) must be provided"
         )
     
     updated_count = 0
@@ -455,13 +455,23 @@ async def bulk_update_media(
     # If uploaded_by is provided, verify the user exists
     target_user_id = None
     if request.uploaded_by:
-        target_user = db.query(User).filter(User.username == request.uploaded_by).first()
+        target_user = db.query(User).filter(User.id == request.uploaded_by).first()
         if not target_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"User '{request.uploaded_by}' not found"
             )
         target_user_id = target_user.id
+    
+    # If collections are provided, verify they all exist
+    target_collections = None
+    if request.collections is not None:
+        target_collections = db.query(Collection).filter(Collection.id.in_(request.collections)).all()
+        if len(target_collections) != len(request.collections):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"One or more collections not found"
+            )
     
     # Update each media item
     for media_id in request.media_ids:
@@ -475,6 +485,10 @@ async def bulk_update_media(
             # Update fields if provided
             if target_user_id is not None:
                 media.uploaded_by = target_user_id
+            
+            if target_collections is not None:
+                # Replace all collections
+                media.collections = target_collections
             
             if request.taken_at is not None:
                 media.taken_at = request.taken_at

@@ -208,7 +208,6 @@ async def upload_media(
                 s3_key=s3_key,
                 s3_bucket=settings.S3_BUCKET_NAME,
                 thumbnail_s3_key=thumbnail_key,
-                collection_id=collection_id,
                 uploaded_by=current_user.user_id,
                 # Add metadata fields
                 width=metadata.get('width'),
@@ -233,6 +232,10 @@ async def upload_media(
             db.add(media)
             db.commit()
             db.refresh(media)
+            
+            # Add media to the collection via many-to-many relationship
+            collection.media.append(media)
+            db.commit()
             
             uploaded_media.append(MediaUploadResponse.model_validate(media))
             
@@ -267,36 +270,55 @@ async def delete_media(
     db: Session = Depends(get_db)
 ):
     """
-    Delete a media file. Can be deleted by the uploader or collection owner.
+    Delete a media file from a collection. Can be deleted by the uploader or collection owner.
+    Note: This only removes the media from the collection, not from other collections or the database
+    unless it's the only collection.
     """
-    media = db.query(Media).filter(
-        Media.id == media_id,
-        Media.collection_id == collection_id
-    ).first()
+    # Get collection
+    collection = db.query(Collection).filter(Collection.id == collection_id).first()
+    if not collection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Collection not found"
+        )
     
+    # Get media
+    media = db.query(Media).filter(Media.id == media_id).first()
     if not media:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Media not found"
         )
     
+    # Check if media is in this collection
+    if collection not in media.collections:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Media not in this collection"
+        )
+    
     # Check permission: uploader or collection owner
-    collection = db.query(Collection).filter(Collection.id == collection_id).first()
     if media.uploaded_by != current_user.user_id and collection.owner_id != current_user.user_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not authorized to delete this media"
         )
     
-    # Delete from S3
-    keys_to_delete = [media.s3_key]
-    if media.thumbnail_s3_key:
-        keys_to_delete.append(media.thumbnail_s3_key)
-    
-    s3_service.delete_files(keys_to_delete)
-    
-    # Delete from database
-    db.delete(media)
+    # Remove from collection
+    media.collections.remove(collection)
     db.commit()
+    
+    # If media is not in any collection, delete it entirely
+    if not media.collections:
+        # Delete from S3
+        keys_to_delete = [media.s3_key]
+        if media.thumbnail_s3_key:
+            keys_to_delete.append(media.thumbnail_s3_key)
+        
+        s3_service.delete_files(keys_to_delete)
+        
+        # Delete from database
+        db.delete(media)
+        db.commit()
     
     return None

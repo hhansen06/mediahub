@@ -18,11 +18,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY backend/app ./app
 COPY backend/alembic ./alembic
+COPY backend/start.sh .
 COPY alembic.ini .
 
 # Create non-root user
 RUN useradd -m -u 1000 mediahub && \
-    chown -R mediahub:mediahub /app
+    chown -R mediahub:mediahub /app && \
+    chmod +x /app/start.sh
 
 USER mediahub
 
@@ -33,5 +35,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:8000/health')"
 
-# Run application with proxy header support for reverse proxy
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers"]
+# Run application with migrations
+CMD ["/app/start.sh"]

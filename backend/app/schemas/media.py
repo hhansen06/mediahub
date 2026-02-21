@@ -38,7 +38,6 @@ class MediaUploadResponse(BaseModel):
     file_size: int
     s3_key: str
     public_hash: Optional[str]
-    collection_id: int
     uploaded_by: str
     created_at: datetime
     
@@ -81,7 +80,6 @@ class MediaResponse(MediaBase):
     s3_bucket: str
     public_hash: Optional[str] = None
     thumbnail_s3_key: Optional[str] = None
-    collection_id: int
     uploaded_by: str
     
     # Thumbnail crop coordinates
@@ -134,7 +132,8 @@ class MediaListResponse(BaseModel):
 
 class MediaBulkUpdateRequest(BaseModel):
     media_ids: list[int] = Field(..., description="List of media IDs to update")
-    uploaded_by: Optional[str] = Field(None, description="New uploader username")
+    uploaded_by: Optional[str] = Field(None, description="New uploader user ID")
+    collections: Optional[list[int]] = Field(None, description="New collection IDs (replaces all collections)")
     taken_at: Optional[datetime] = Field(None, description="New taken_at date")
 
 

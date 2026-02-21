@@ -83,7 +83,11 @@ async def login(request: Request):
 
 @router.get("/callback")
 async def auth_callback(code: str, request: Request, db: Session = Depends(get_db)):
-    """Handle Keycloak OAuth2 callback"""
+    """Handle Keycloak OAuth2 callback
+    
+    Handles user deduplication: if a user with the same email exists locally
+    (created manually as uploader), their ID is updated to the Keycloak user ID
+    """
     try:
         # Always use explicitly configured external URL
         base_url = settings.APP_EXTERNAL_URL
@@ -102,17 +106,53 @@ async def auth_callback(code: str, request: Request, db: Session = Depends(get_d
         # Get user info from token
         user_info = keycloak_client.userinfo(access_token)
         
+        keycloak_user_id = user_info["sub"]
+        email = user_info.get("email")
+        username = user_info.get("preferred_username", email)
+        
         # Create or update user in database
         from app.models.user import User
-        user = db.query(User).filter(User.id == user_info["sub"]).first()
+        from app.models.collection import Collection
+        
+        # First, check if user already exists with Keycloak ID
+        user = db.query(User).filter(User.id == keycloak_user_id).first()
         
         if not user:
-            user = User(
-                id=user_info["sub"],
-                username=user_info.get("preferred_username", user_info.get("email")),
-                email=user_info.get("email")
-            )
+            # User doesn't exist with this Keycloak ID
+            # Check if user was manually created with the same email
+            user_by_email = db.query(User).filter(User.email == email).first()
+            
+            if user_by_email:
+                # Merge: Update the manually created user with Keycloak ID
+                user_by_email.id = keycloak_user_id
+                user_by_email.username = username
+                user = user_by_email
+                print(f"User deduplication: Updated temp user {email} with Keycloak ID")
+            else:
+                # Create new user
+                user = User(
+                    id=keycloak_user_id,
+                    username=username,
+                    email=email
+                )
+                print(f"Created new user {email} from Keycloak")
+            
             db.add(user)
+            db.commit()
+            db.refresh(user)
+            
+            # Create automatic user collection if user was just created
+            if not user_by_email:
+                user_collection = Collection(
+                    name=f"{user.email} (Auto)",
+                    description=f"Automatically created collection for {user.email}",
+                    owner_id=user.id
+                )
+                db.add(user_collection)
+                db.commit()
+        else:
+            # User already exists, update username if changed
+            user.username = username
             db.commit()
             db.refresh(user)
         

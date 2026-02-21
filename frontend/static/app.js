@@ -1,9 +1,11 @@
 // API Configuration
-// Always use localhost:8004 for development
+// Determine the correct API base URL
 let API_BASE_URL = window.location.origin;
-if (window.location.hostname === 'localhost' && !window.location.port) {
-    // If no port is specified, use 8004
-    API_BASE_URL = 'http://localhost:8004';
+// If running on localhost without a port (or on port 80), use port 8004
+if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    if (!window.location.port || window.location.port === '80') {
+        API_BASE_URL = 'http://' + window.location.hostname + ':8004';
+    }
 }
 
 // Toast Notification System
@@ -348,6 +350,7 @@ function showApp() {
                 <nav class="nav">
                     <a href="#" onclick="navigateTo('images'); return false;">Bilder</a>
                     <a href="#" onclick="navigateTo('collections'); return false;">Sammlungen</a>
+                    <a href="#" onclick="navigateTo('users'); return false;">Uploader</a>
                     <div class="user-info">
                         <span>${currentUser.username}</span>
                         <button onclick="handleProfileClick()" class="btn btn-outline">Profil</button>
@@ -366,6 +369,8 @@ function buildRouteHash(view, params = {}) {
             return '#/images';
         case 'collections':
             return '#/collections';
+        case 'users':
+            return '#/users';
         case 'gallery':
             return `#/collections/${params.collectionId}`;
         case 'settings':
@@ -383,6 +388,10 @@ function parseRouteFromLocation() {
 
     if (parts[0] === 'images') {
         return { view: 'images', params: {} };
+    }
+
+    if (parts[0] === 'users') {
+        return { view: 'users', params: {} };
     }
 
     if (parts[0] === 'collections' && parts[1] && parts[2] === 'settings') {
@@ -435,6 +444,10 @@ async function renderRoute(state) {
         case 'collections':
             closeDetailModal();
             await loadCollections();
+            break;
+        case 'users':
+            closeDetailModal();
+            await loadUsers();
             break;
         case 'gallery':
             closeDetailModal();
@@ -556,15 +569,40 @@ async function apiRequest(endpoint, options = {}) {
     }
 
     if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        throw new Error(error.detail || 'Request failed');
+        let errorMessage = 'Request failed';
+        try {
+            const error = await response.json();
+            if (Array.isArray(error)) {
+                // If error is an array (validation errors from FastAPI)
+                errorMessage = error.map((e) => {
+                    if (e.msg) return e.msg;
+                    if (e.detail) return e.detail;
+                    return JSON.stringify(e);
+                }).join('; ');
+            } else if (typeof error === 'object' && error !== null) {
+                errorMessage = error.detail || error.message || JSON.stringify(error);
+            } else {
+                errorMessage = String(error);
+            }
+        } catch (e) {
+            // If response is not JSON, use status text
+            errorMessage = response.statusText || `HTTP ${response.status}`;
+        }
+        const err = new Error(errorMessage);
+        err.detail = errorMessage;
+        throw err;
     }
 
     if (response.status === 204) {
         return null;
     }
 
-    return response.json();
+    try {
+        return await response.json();
+    } catch (e) {
+        console.error('Error parsing response JSON:', e);
+        throw new Error('Invalid response format');
+    }
 }
 
 // Collections
@@ -788,6 +826,9 @@ async function loadImages(reset = true) {
                 </button>
                 <label for="imagesDateFilter" style="color: var(--text-secondary);">Datum</label>
                 <select id="imagesDateFilter" class="form-input" style="min-width: 200px;"></select>
+                <button id="bulkEditDateBtn" class="btn btn-secondary" style="display: none;" onclick="bulkEditByDate()">
+                    Alle dieses Datums bearbeiten
+                </button>
             </div>
         </div>
         <div id="uploadZone"></div>
@@ -856,8 +897,23 @@ function renderImageDateFilter(dates) {
     select.onchange = () => {
         imagesDateFilter = select.value;
         imagesLastDateKey = null;
+        updateBulkEditDateButton();
         loadAllImages(true);
     };
+
+    updateBulkEditDateButton();
+}
+
+function updateBulkEditDateButton() {
+    const btn = document.getElementById('bulkEditDateBtn');
+    if (!btn) return;
+
+    // Show button only if a specific date is selected (not "all" or empty)
+    if (imagesDateFilter && imagesDateFilter !== '') {
+        btn.style.display = 'inline-block';
+    } else {
+        btn.style.display = 'none';
+    }
 }
 
 function setupUploadZone(collectionId) {
@@ -1074,7 +1130,7 @@ async function loadAllImages(reset = true) {
         const limit = 20;
         const skip = (imagesPage - 1) * limit;
         const dateParam = imagesDateFilter ? `&date=${encodeURIComponent(imagesDateFilter)}` : '';
-        const response = await apiRequest(`/api/media?media_type=image&sort_by=taken_at&sort_order=desc${dateParam}&limit=${limit}&skip=${skip}`);
+        const response = await apiRequest(`/api/media/?media_type=image&sort_by=taken_at&sort_order=desc${dateParam}&limit=${limit}&skip=${skip}`);
 
         window.currentMediaList = window.currentMediaList.concat(response.items);
 
@@ -1890,48 +1946,71 @@ function updateBulkEditButton() {
 }
 
 async function openBulkEditDialog() {
-    if (selectedMediaIds.size === 0) return;
+    if (selectedMediaIds.size === 0) {
+        console.log('No media selected');
+        return;
+    }
+
+    console.log('Opening bulk edit dialog for', selectedMediaIds.size, 'items');
 
     // Fetch user list for uploader select
     let users = [];
     try {
-        users = await apiRequest('/api/users/');
+        const response = await apiRequest('/api/users/');
+        users = response.items || [];
+        console.log('Loaded users:', users);
     } catch (error) {
         console.error('Error fetching users:', error);
+        users = [];
+    }
+
+    // Fetch collection list
+    let collections = [];
+    try {
+        const response = await apiRequest('/api/collections/');
+        collections = response.items || [];
+        console.log('Loaded collections:', collections);
+    } catch (error) {
+        console.error('Error fetching collections:', error);
+        collections = [];
     }
 
     const modal = document.createElement('div');
-    modal.className = 'modal';
-    modal.style.display = 'flex';
+    modal.className = 'modal active detail-modal';
     modal.innerHTML = `
         <div class="modal-content" style="max-width: 500px;">
             <div class="modal-header">
-                <h2>Bilder bearbeiten (${selectedMediaIds.size} ausgewählt)</h2>
-                <button class="btn-close" onclick="this.closest('.modal').remove()">×</button>
+                <h2 class="modal-title">Bilder bearbeiten (${selectedMediaIds.size} ausgewählt)</h2>
+                <button class="close-btn" onclick="this.closest('.modal').remove()">×</button>
             </div>
-            <div class="modal-body">
-                <form id="bulkEditForm" onsubmit="event.preventDefault(); submitBulkEdit();">
-                    <div class="form-group">
-                        <label for="bulkUploader">Uploader ändern (optional)</label>
-                        <select id="bulkUploader" class="form-input">
-                            <option value="">-- Nicht ändern --</option>
-                            ${users.map(u => `<option value="${escapeHtml(u.username)}">${escapeHtml(u.full_name || u.username)}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="bulkTakenAt">Aufnahmedatum ändern (optional)</label>
-                        <input type="datetime-local" id="bulkTakenAt" class="form-input">
-                        <small style="color: var(--text-secondary);">Leer lassen für "Kein Datum"</small>
-                    </div>
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-secondary" onclick="this.closest('.modal').remove()">
-                            Abbrechen
-                        </button>
-                        <button type="submit" class="btn btn-primary">
-                            Speichern
-                        </button>
-                    </div>
-                </form>
+            <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                <div>
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Uploader ändern (optional)</label>
+                    <select id="bulkUploader" class="form-input" style="width: 100%;">
+                        <option value="">-- Nicht ändern --</option>
+                        ${users.map(u => `<option value="${u.id}">${escapeHtml(u.full_name || u.username)}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Sammlung ändern (optional)</label>
+                    <select id="bulkCollection" class="form-input" style="width: 100%;">
+                        <option value="">-- Nicht ändern --</option>
+                        ${collections.map(c => `<option value="${c.id}">${escapeHtml(c.name)}</option>`).join('')}
+                    </select>
+                </div>
+                <div>
+                    <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Aufnahmedatum ändern (optional)</label>
+                    <input type="datetime-local" id="bulkTakenAt" class="form-input" style="width: 100%;">
+                    <small style="color: var(--text-secondary);">Leer lassen für "Kein Datum"</small>
+                </div>
+                <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-outline" onclick="this.closest('.modal').remove()">
+                        Abbrechen
+                    </button>
+                    <button type="button" class="btn btn-primary" onclick="submitBulkEdit()">
+                        Speichern
+                    </button>
+                </div>
             </div>
         </div>
     `;
@@ -1941,12 +2020,14 @@ async function openBulkEditDialog() {
 
 async function submitBulkEdit() {
     const uploaderSelect = document.getElementById('bulkUploader');
+    const collectionSelect = document.getElementById('bulkCollection');
     const takenAtInput = document.getElementById('bulkTakenAt');
 
     const uploaded_by = uploaderSelect.value || null;
+    const collections = collectionSelect.value ? [parseInt(collectionSelect.value)] : null;
     const taken_at = takenAtInput.value ? new Date(takenAtInput.value).toISOString() : null;
 
-    if (!uploaded_by && !taken_at) {
+    if (!uploaded_by && !collections && !taken_at) {
         showToast('Bitte mindestens ein Feld auswählen', 'warning');
         return;
     }
@@ -1957,20 +2038,26 @@ async function submitBulkEdit() {
         };
 
         if (uploaded_by) payload.uploaded_by = uploaded_by;
+        if (collections) payload.collections = collections;
         if (taken_at) payload.taken_at = taken_at;
 
+        console.log('Submitting bulk edit:', payload);
         const response = await apiRequest('/api/media/bulk', {
             method: 'PATCH',
             body: payload
         });
 
+        console.log('Bulk edit response:', response);
+
         // Close modal
-        document.querySelector('.modal').remove();
+        const modal = document.querySelector('.modal.active');
+        if (modal) modal.remove();
 
         // Reset selection
         selectedMediaIds.clear();
         lastSelectedIndex = null;
         isSelectionMode = false;
+        updateBulkEditButton();
 
         // Reload images
         showToast(`${response.updated_count} Bilder erfolgreich aktualisiert`, 'success');
@@ -1978,7 +2065,7 @@ async function submitBulkEdit() {
 
     } catch (error) {
         console.error('Error updating media:', error);
-        showToast('Fehler beim Aktualisieren der Bilder', 'error');
+        showToast('Fehler beim Aktualisieren der Bilder: ' + (error.message || error), 'error');
     }
 }
 
@@ -2023,6 +2110,58 @@ async function rotateImage(mediaId) {
     } catch (error) {
         console.error('Error rotating image:', error);
         showToast('Fehler beim Rotieren: ' + error.message, 'error');
+    }
+}
+
+// Bulk Edit by Date
+async function bulkEditByDate() {
+    if (!imagesDateFilter) {
+        showToast('Bitte wähle ein Datum aus', 'warning');
+        return;
+    }
+
+    try {
+        // Load all images for the selected date
+        const dateParam = `&date=${encodeURIComponent(imagesDateFilter)}`;
+        console.log('Loading images for date:', imagesDateFilter);
+        const response = await apiRequest(`/api/media/?media_type=image&sort_by=taken_at&sort_order=desc${dateParam}&limit=500&skip=0`);
+
+        console.log('Response received:', response);
+        if (!response || !response.items || response.items.length === 0) {
+            showToast('Keine Bilder für dieses Datum gefunden', 'warning');
+            return;
+        }
+
+        console.log(`Found ${response.items.length} images for date ${imagesDateFilter}`);
+
+        // Select all loaded images
+        selectedMediaIds.clear();
+        response.items.forEach(media => {
+            selectedMediaIds.add(media.id);
+        });
+
+        console.log(`Selected ${selectedMediaIds.size} images`);
+
+        // Update bulk edit button display
+        updateBulkEditButton();
+
+        // Open bulk edit dialog
+        console.log('Opening bulk edit dialog');
+        await openBulkEditDialog();
+
+    } catch (error) {
+        console.error('Error loading images for date:', error);
+        let errorMsg = 'Fehler beim Laden der Bilder';
+        if (error.detail) {
+            errorMsg = error.detail;
+        } else if (error.message) {
+            errorMsg = error.message;
+        } else if (typeof error === 'string') {
+            errorMsg = error;
+        }
+        console.error('Full error object:', error);
+        console.error('Error message:', errorMsg);
+        showToast(errorMsg, 'error');
     }
 }
 
@@ -2282,5 +2421,220 @@ async function copyPublicLink(publicHash) {
     } catch (error) {
         console.error('Error copying public link:', error);
         showToast('Fehler beim Kopieren: ' + error.message, 'error');
+    }
+}
+
+// User Management
+let usersList = [];
+
+async function loadUsers() {
+    try {
+        const response = await apiRequest('/api/users/?skip=0&limit=1000');
+        usersList = response.items;
+
+        const content = document.getElementById('content');
+        content.innerHTML = `
+            <div style="max-width: 1200px; margin: 0 auto;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                    <h1>Uploader verwalten</h1>
+                    <button onclick="showCreateUserModal()" class="btn btn-primary">+ Neuer Uploader</button>
+                </div>
+                
+                <div id="usersTableContainer" style="overflow-x: auto; background: var(--bg-secondary); border-radius: 8px; padding: 1rem;">
+                    <table style="width: 100%; border-collapse: collapse; color: var(--text-primary);">
+                        <thead>
+                            <tr style="border-bottom: 2px solid var(--border-color);">
+                                <th style="padding: 1rem; text-align: left; font-weight: 600;">Username</th>
+                                <th style="padding: 1rem; text-align: left; font-weight: 600;">Email</th>
+                                <th style="padding: 1rem; text-align: left; font-weight: 600;">Name</th>
+                                <th style="padding: 1rem; text-align: left; font-weight: 600;">Watermark</th>
+                                <th style="padding: 1rem; text-align: center; font-weight: 600;">Aktionen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="usersTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+
+        const tbody = document.getElementById('usersTableBody');
+        tbody.innerHTML = usersList.map(user => `
+            <tr style="border-bottom: 1px solid var(--border-color);">
+                <td style="padding: 1rem;">${escapeHtml(user.username)}</td>
+                <td style="padding: 1rem;">${escapeHtml(user.email)}</td>
+                <td style="padding: 1rem;">${escapeHtml(user.full_name || '-')}</td>
+                <td style="padding: 1rem; max-width: 250px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(user.watermark_text || '-')}</td>
+                <td style="padding: 1rem; text-align: center;">
+                    <button onclick="showEditUserModal('${user.id}')" class="btn btn-secondary" style="padding: 0.5rem 1rem; margin-right: 0.5rem;">Bearbeiten</button>
+                    <button onclick="deleteUser('${user.id}')" class="btn btn-danger" style="padding: 0.5rem 1rem;">Löschen</button>
+                </td>
+            </tr>
+        `).join('');
+
+    } catch (error) {
+        console.error('Error loading users:', error);
+        showToast('Fehler beim Laden der Uploader: ' + error.message, 'error');
+    }
+}
+
+function showCreateUserModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal active';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Neuer Uploader</h2>
+                <button class="close-btn" onclick="this.closest('.modal').remove()">×</button>
+            </div>
+            <form onsubmit="handleCreateUser(event)">
+                <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Username</label>
+                        <input type="text" id="newUsername" required placeholder="z.B. photographer1" class="form-input" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Email</label>
+                        <input type="email" id="newEmail" required placeholder="user@example.com" class="form-input" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Name (optional)</label>
+                        <input type="text" id="newFullName" placeholder="Max Mustermann" class="form-input" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Watermark Text (optional)</label>
+                        <input type="text" id="newWatermark" placeholder="© Max Mustermann" class="form-input" style="width: 100%;">
+                    </div>
+                    <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem;">
+                        <button type="button" onclick="this.closest('.modal').remove()" class="btn btn-outline">Abbrechen</button>
+                        <button type="submit" class="btn btn-primary">Erstellen</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+async function handleCreateUser(event) {
+    event.preventDefault();
+
+    try {
+        const username = document.getElementById('newUsername').value.trim();
+        const email = document.getElementById('newEmail').value.trim();
+        const fullName = document.getElementById('newFullName').value.trim();
+        const watermark = document.getElementById('newWatermark').value.trim();
+
+        if (!username || !email) {
+            showToast('Username und Email sind erforderlich', 'error');
+            return;
+        }
+
+        const response = await apiRequest('/api/users/', {
+            method: 'POST',
+            body: {
+                username,
+                email,
+                full_name: fullName || null,
+                watermark_text: watermark || null
+            }
+        });
+
+        document.querySelector('.modal').remove();
+        showToast(`Uploader "${username}" erfolgreich erstellt`, 'success');
+        await loadUsers();
+
+    } catch (error) {
+        console.error('Error creating user:', error);
+        const errorMessage = error.detail || error.message || 'Fehler beim Erstellen';
+        showToast(errorMessage, 'error');
+    }
+}
+
+function showEditUserModal(userId) {
+    const user = usersList.find(u => u.id === userId);
+    if (!user) return;
+
+    const modal = document.createElement('div');
+    modal.className = 'modal active';
+    modal.innerHTML = `
+        <div class="modal-content" style="max-width: 500px;">
+            <div class="modal-header">
+                <h2 class="modal-title">Uploader bearbeiten</h2>
+                <button class="close-btn" onclick="this.closest('.modal').remove()">×</button>
+            </div>
+            <form onsubmit="handleEditUser('${userId}', event)">
+                <div style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;">
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Username</label>
+                        <input type="text" value="${escapeHtml(user.username)}" disabled class="form-input" style="width: 100%; opacity: 0.7;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Email</label>
+                        <input type="email" value="${escapeHtml(user.email)}" disabled class="form-input" style="width: 100%; opacity: 0.7;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Name</label>
+                        <input type="text" id="editFullName" value="${escapeHtml(user.full_name || '')}" placeholder="Max Mustermann" class="form-input" style="width: 100%;">
+                    </div>
+                    <div>
+                        <label style="display: block; margin-bottom: 0.5rem; font-weight: 500;">Watermark Text</label>
+                        <input type="text" id="editWatermark" value="${escapeHtml(user.watermark_text || '')}" placeholder="© Name" class="form-input" style="width: 100%;">
+                    </div>
+                    <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem;">
+                        <button type="button" onclick="this.closest('.modal').remove()" class="btn btn-outline">Abbrechen</button>
+                        <button type="submit" class="btn btn-primary">Speichern</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+async function handleEditUser(userId, event) {
+    event.preventDefault();
+
+    try {
+        const fullName = document.getElementById('editFullName').value.trim();
+        const watermark = document.getElementById('editWatermark').value.trim();
+
+        await apiRequest(`/api/users/${userId}`, {
+            method: 'PATCH',
+            body: {
+                full_name: fullName || null,
+                watermark_text: watermark || null
+            }
+        });
+
+        document.querySelector('.modal').remove();
+        showToast('Uploader erfolgreich aktualisiert', 'success');
+        await loadUsers();
+
+    } catch (error) {
+        console.error('Error editing user:', error);
+        showToast('Fehler beim Aktualisieren: ' + (error.detail || error.message), 'error');
+    }
+}
+
+async function deleteUser(userId) {
+    const user = usersList.find(u => u.id === userId);
+    if (!user) return;
+
+    if (!confirm(`Möchtest du den Uploader "${user.username}" wirklich löschen? Diese Aktion kann nicht rückgängig gemacht werden.`)) {
+        return;
+    }
+
+    try {
+        await apiRequest(`/api/users/${userId}`, {
+            method: 'DELETE'
+        });
+
+        showToast(`Uploader "${user.username}" gelöscht`, 'success');
+        await loadUsers();
+
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        showToast('Fehler beim Löschen: ' + (error.detail || error.message), 'error');
     }
 }

@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, DateTime, Date, Text, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.core.database import Base
+from app.models.media_collection import media_collections
 
 
 class Collection(Base):
@@ -21,4 +22,4 @@ class Collection(Base):
     
     # Relationships
     owner = relationship("User", back_populates="collections")
-    media = relationship("Media", back_populates="collection", cascade="all, delete-orphan")
+    media = relationship("Media", secondary=media_collections, back_populates="collections")
