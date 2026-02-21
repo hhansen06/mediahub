@@ -183,6 +183,37 @@ class S3Service:
         # OVH S3 doesn't support public-read ACL, so use presigned URLs
         return self.generate_presigned_url(key, expiration=3600)  # 1 hour
     
+    def generate_direct_public_url(self, key: str) -> str:
+        """Generate a direct public URL for an object with public-read ACL
+        
+        Returns the absolute URL to the object in S3, without signature.
+        Only works if the bucket has public-read ACL set.
+        """
+        # Remove trailing slash from endpoint URL if present
+        endpoint_url = settings.S3_ENDPOINT_URL.rstrip('/')
+        bucket = self.bucket_name
+        
+        # Construct direct public URL
+        # Format: https://endpoint/bucket/key
+        return f"{endpoint_url}/{bucket}/{key}"
+    
+    def set_bucket_public_read_acl(self) -> bool:
+        """Set the bucket ACL to public-read
+        
+        This allows direct public access to all objects in the bucket without presigned URLs.
+        Returns True if successful, False otherwise.
+        """
+        try:
+            self.s3_client.put_bucket_acl(
+                Bucket=self.bucket_name,
+                ACL='public-read'
+            )
+            print(f"Successfully set bucket '{self.bucket_name}' to public-read ACL")
+            return True
+        except ClientError as e:
+            print(f"Error setting bucket ACL to public-read: {e}")
+            return False
+    
     def convert_heic_to_jpeg(self, file_obj: BinaryIO, filename: str) -> tuple[BinaryIO, str]:
         """
         Convert HEIC image to JPEG format while preserving EXIF data.
