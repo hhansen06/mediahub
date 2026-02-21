@@ -151,7 +151,12 @@ async def get_public_image(
         username = uploader.username if uploader else None
         
         # Generate public image with watermark and logo
-        public_image = s3_service.generate_public_image(media.s3_key, watermark_text, username)
+        public_image = s3_service.generate_public_image(
+            media.s3_key,
+            watermark_text,
+            username,
+            media.rotation_angle or 0
+        )
         
         if not public_image:
             raise HTTPException(
@@ -164,7 +169,9 @@ async def get_public_image(
             media_type="image/jpeg",
             headers={
                 "Content-Disposition": f'inline; filename="public_{media.filename}"',
-                "Cache-Control": "max-age=86400"  # Cache for 1 day
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
             }
         )
         
@@ -217,12 +224,25 @@ async def get_public_thumbnail(
             )
         
         from io import BytesIO
+        from PIL import Image
+
+        # Apply rotation if needed (clockwise)
+        if media.rotation_angle and media.rotation_angle % 360 != 0:
+            img = Image.open(BytesIO(thumbnail_data))
+            img = img.rotate(-media.rotation_angle, expand=True)
+            rotated_io = BytesIO()
+            img.save(rotated_io, format='JPEG', quality=85, optimize=True)
+            rotated_io.seek(0)
+            thumbnail_data = rotated_io.getvalue()
+
         return StreamingResponse(
             BytesIO(thumbnail_data),
             media_type="image/jpeg",
             headers={
                 "Content-Disposition": f'inline; filename="thumb_{media.filename}"',
-                "Cache-Control": "max-age=86400"  # Cache for 1 day
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
             }
         )
         

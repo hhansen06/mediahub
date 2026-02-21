@@ -418,7 +418,13 @@ class S3Service:
         # If background is light (> 128), use dark text, otherwise use light text
         return (0, 0, 0) if avg_brightness > 128 else (255, 255, 255)
     
-    def generate_public_image(self, image_key: str, watermark_text: Optional[str] = None, username: Optional[str] = None) -> Optional[bytes]:
+    def generate_public_image(
+        self,
+        image_key: str,
+        watermark_text: Optional[str] = None,
+        username: Optional[str] = None,
+        rotation_angle: int = 0
+    ) -> Optional[bytes]:
         """Generate a public version of the image with:
         - Max 1024px width or height
         - "Copyright by {username}" in top-left corner (with auto text color)
@@ -443,6 +449,10 @@ class S3Service:
             
             # Open image
             img = Image.open(BytesIO(image_data)).convert('RGB')
+
+            # Apply rotation if needed (clockwise)
+            if rotation_angle and rotation_angle % 360 != 0:
+                img = img.rotate(-rotation_angle, expand=True)
             original_width, original_height = img.size
             
             # Resize to max 1024px on longest dimension
