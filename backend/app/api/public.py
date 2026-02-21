@@ -158,17 +158,11 @@ async def get_public_images(
         # Order by date descending
         media_list = query.order_by(Media.taken_at.desc()).all()
         
-        # Build response with presigned URLs (1 hour validity)
+        # Build response with public API URLs
         items = []
         for media in media_list:
-            # Generate presigned URLs with 1 hour expiration
-            public_url = s3_service.generate_presigned_url(media.s3_key, expiration=3600)
-            
-            # Use thumbnail if available, otherwise use original image
-            if media.thumbnail_s3_key:
-                thumbnail_url = s3_service.generate_presigned_url(media.thumbnail_s3_key, expiration=3600)
-            else:
-                thumbnail_url = s3_service.generate_presigned_url(media.s3_key, expiration=3600)
+            public_url = f"/api/media/public/{media.public_hash}"
+            thumbnail_url = f"/api/media/public/thumbnail/{media.public_hash}"
             
             items.append(PublicImageResponse(
                 public_url=public_url,
