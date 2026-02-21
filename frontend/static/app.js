@@ -1071,7 +1071,7 @@ async function loadAllImages(reset = true) {
     imagesIsLoadingMore = true;
 
     try {
-        const limit = 100;
+        const limit = 20;
         const skip = (imagesPage - 1) * limit;
         const dateParam = imagesDateFilter ? `&date=${encodeURIComponent(imagesDateFilter)}` : '';
         const response = await apiRequest(`/api/media?media_type=image&sort_by=taken_at&sort_order=desc${dateParam}&limit=${limit}&skip=${skip}`);
@@ -1222,7 +1222,7 @@ async function loadMedia(collectionId, reset = true) {
     isLoadingMoreMedia = true;
 
     try {
-        const limit = 100;
+        const limit = 50;
         const skip = (currentMediaPage - 1) * limit;
         const response = await apiRequest(`/api/media/collections/${collectionId}?limit=${limit}&skip=${skip}`);
 
