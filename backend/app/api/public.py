@@ -107,7 +107,7 @@ async def get_public_images(
 ):
     """Get public images filtered by collection and/or date
     
-    Returns images with direct S3 URLs (requires public-read ACL on S3 objects).
+    Returns images with presigned URLs (valid for 1 hour).
     At least one filter (collection_id or date) must be provided.
     """
     try:
@@ -158,17 +158,17 @@ async def get_public_images(
         # Order by date descending
         media_list = query.order_by(Media.taken_at.desc()).all()
         
-        # Build response with direct public S3 URLs
+        # Build response with presigned URLs (1 hour validity)
         items = []
         for media in media_list:
-            # Use direct public URLs from S3
-            public_url = s3_service.generate_direct_public_url(media.s3_key)
+            # Generate presigned URLs with 1 hour expiration
+            public_url = s3_service.generate_presigned_url(media.s3_key, expiration=3600)
             
-            # Use presigned URL for thumbnail if available, otherwise presigned original
+            # Use thumbnail if available, otherwise use original image
             if media.thumbnail_s3_key:
-                thumbnail_url = s3_service.generate_direct_public_url(media.thumbnail_s3_key)
+                thumbnail_url = s3_service.generate_presigned_url(media.thumbnail_s3_key, expiration=3600)
             else:
-                thumbnail_url = s3_service.generate_direct_public_url(media.s3_key)
+                thumbnail_url = s3_service.generate_presigned_url(media.s3_key, expiration=3600)
             
             items.append(PublicImageResponse(
                 public_url=public_url,
