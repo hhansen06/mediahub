@@ -1,7 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.proxy_fix import ProxyFixMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -14,8 +13,9 @@ app = FastAPI(
     debug=settings.DEBUG
 )
 
-# Trust X-Forwarded-* headers from reverse proxy
-app.add_middleware(TrustedHostMiddleware, allowed_hosts=["*"])
+# Trust X-Forwarded-* headers from reverse proxy (Traefik)
+# This must be added FIRST before other middleware
+app.add_middleware(ProxyFixMiddleware, trusted_hosts=["*"])
 
 # CORS middleware
 app.add_middleware(
