@@ -1,11 +1,35 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.proxy_fix import ProxyFixMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pathlib import Path
 from app.core.config import settings
 from app.api import auth, collections, media_upload, media, public
+
+
+class TrustedProxyMiddleware(BaseHTTPMiddleware):
+    """Middleware to handle X-Forwarded-* headers from reverse proxies like Traefik"""
+    async def dispatch(self, request: Request, call_next):
+        # Update request scope with X-Forwarded headers
+        if "x-forwarded-for" in request.headers:
+            # Set client to the forwarded IP
+            request.scope["client"] = (request.headers["x-forwarded-for"].split(",")[0].strip(), 0)
+        
+        if "x-forwarded-proto" in request.headers:
+            # Set scheme to the forwarded protocol
+            request.scope["scheme"] = request.headers["x-forwarded-proto"]
+        
+        if "x-forwarded-host" in request.headers:
+            # Set server to the forwarded host
+            host = request.headers["x-forwarded-host"]
+            port = 443 if request.headers.get("x-forwarded-proto") == "https" else 80
+            request.scope["server"] = (host, port)
+        
+        response = await call_next(request)
+        return response
+
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -15,7 +39,7 @@ app = FastAPI(
 
 # Trust X-Forwarded-* headers from reverse proxy (Traefik)
 # This must be added FIRST before other middleware
-app.add_middleware(ProxyFixMiddleware, trusted_hosts=["*"])
+app.add_middleware(TrustedProxyMiddleware)
 
 # CORS middleware
 app.add_middleware(
