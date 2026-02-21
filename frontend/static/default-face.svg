@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Background -->
+  <rect width="200" height="200" fill="#e0e7ff"/>
+  
+  <!-- Head -->
+  <circle cx="100" cy="85" r="50" fill="#c7d2fe"/>
+  
+  <!-- Left Eye -->
+  <circle cx="85" cy="75" r="6" fill="#1e40af"/>
+  
+  <!-- Right Eye -->
+  <circle cx="115" cy="75" r="6" fill="#1e40af"/>
+  
+  <!-- Nose -->
+  <line x1="100" y1="80" x2="100" y2="95" stroke="#a5b4fc" stroke-width="2"/>
+  
+  <!-- Mouth -->
+  <path d="M 85 110 Q 100 120 115 110" stroke="#a5b4fc" stroke-width="2" fill="none" stroke-linecap="round"/>
+  
+  <!-- Shoulders -->
+  <ellipse cx="100" cy="160" rx="60" ry="35" fill="#c7d2fe"/>
+</svg>
