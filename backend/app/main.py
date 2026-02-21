@@ -12,22 +12,35 @@ from app.api import auth, collections, media_upload, media, public
 class TrustedProxyMiddleware(BaseHTTPMiddleware):
     """Middleware to handle X-Forwarded-* headers from reverse proxies like Traefik"""
     async def dispatch(self, request: Request, call_next):
+        # Extract forwarded headers (case-insensitive)
+        forwarded_proto = request.headers.get("x-forwarded-proto")
+        forwarded_host = request.headers.get("x-forwarded-host")
+        forwarded_for = request.headers.get("x-forwarded-for")
+        
         # Update request scope with X-Forwarded headers
-        if "x-forwarded-for" in request.headers:
+        if forwarded_for:
             # Set client to the forwarded IP
-            request.scope["client"] = (request.headers["x-forwarded-for"].split(",")[0].strip(), 0)
+            request.scope["client"] = (forwarded_for.split(",")[0].strip(), 0)
         
-        if "x-forwarded-proto" in request.headers:
+        if forwarded_proto:
             # Set scheme to the forwarded protocol
-            request.scope["scheme"] = request.headers["x-forwarded-proto"]
+            request.scope["scheme"] = forwarded_proto
         
-        if "x-forwarded-host" in request.headers:
+        if forwarded_host:
             # Set server to the forwarded host
-            host = request.headers["x-forwarded-host"]
-            port = 443 if request.headers.get("x-forwarded-proto") == "https" else 80
-            request.scope["server"] = (host, port)
+            port = 443 if forwarded_proto == "https" else 80
+            request.scope["server"] = (forwarded_host, port)
         
         response = await call_next(request)
+        
+        # Fix Location header in redirects if it has the wrong scheme
+        if "location" in response.headers and forwarded_proto:
+            location = response.headers["location"]
+            # If location starts with http:// but we're behind an https proxy, fix it
+            if forwarded_proto == "https" and location.startswith("http://"):
+                location = location.replace("http://", "https://", 1)
+                response.headers["location"] = location
+        
         return response
 
 
